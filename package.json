@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test": "vitest run src/mosaic-utils.test.ts"
+    "test": "vitest run src/mosaic-utils.test.ts src/i18n.test.ts"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

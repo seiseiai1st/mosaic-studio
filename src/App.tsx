@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, Download, Image as ImageIcon, LockKeyhole, MousePointer2, RotateCcw, ShieldCheck, Sparkles, Trash2, Undo2, Upload, WandSparkles } from 'lucide-react'
+import { Check, Download, Image as ImageIcon, Languages, LockKeyhole, MousePointer2, RotateCcw, ShieldCheck, Sparkles, Trash2, Undo2, Upload, WandSparkles } from 'lucide-react'
+import { getInitialLanguage, LANGUAGE_STORAGE_KEY, translations, type Language } from './i18n'
 import { clampRect, normalizeRect, type MosaicRect, type Point } from './mosaic-utils'
 
 type ExportType = 'image/png' | 'image/jpeg'
@@ -32,6 +33,7 @@ function drawMosaic(context: CanvasRenderingContext2D, image: HTMLImageElement, 
 }
 
 function App() {
+  const [language, setLanguage] = useState<Language>(() => getInitialLanguage(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)))
   const [file, setFile] = useState<File | null>(null)
   const [image, setImage] = useState<HTMLImageElement | null>(null)
   const [imageUrl, setImageUrl] = useState('')
@@ -42,12 +44,13 @@ function App() {
   const [exportType, setExportType] = useState<ExportType>('image/png')
   const [quality, setQuality] = useState(92)
   const [draggingFile, setDraggingFile] = useState(false)
-  const [message, setMessage] = useState('')
+  const [message, setMessage] = useState<'invalidFile' | 'loadError' | ''>('')
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const downloadCanvasRef = useRef<HTMLCanvasElement | null>(null)
 
   const hasImage = Boolean(image)
+  const t = translations[language]
   const dimensions = image ? `${image.naturalWidth.toLocaleString()} × ${image.naturalHeight.toLocaleString()} px` : ''
   const outputName = useMemo(() => {
     const base = file?.name.replace(/\.[^.]+$/, '') || 'mosaic-image'
@@ -78,12 +81,18 @@ function App() {
 
   useEffect(() => renderCanvas(), [renderCanvas])
   useEffect(() => () => { if (imageUrl) URL.revokeObjectURL(imageUrl) }, [imageUrl])
+  useEffect(() => {
+    document.documentElement.lang = language === 'zh' ? 'zh-CN' : language
+    document.title = t.metaTitle
+    document.querySelector('meta[name="description"]')?.setAttribute('content', t.metaDescription)
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language)
+  }, [language, t.metaDescription, t.metaTitle])
 
   const resetEditor = () => { setRects([]); setDraft(null); setDragStart(null); setMessage('') }
 
   const acceptFile = (candidate?: File) => {
     if (!candidate) return
-    if (!ACCEPTED_TYPES.includes(candidate.type)) { setMessage('JPG・PNG・WebP画像を選択してください。'); return }
+    if (!ACCEPTED_TYPES.includes(candidate.type)) { setMessage('invalidFile'); return }
     if (imageUrl) URL.revokeObjectURL(imageUrl)
     const nextUrl = URL.createObjectURL(candidate)
     const nextImage = new Image()
@@ -92,7 +101,7 @@ function App() {
       if (canvas) { canvas.width = nextImage.naturalWidth; canvas.height = nextImage.naturalHeight }
       setFile(candidate); setImage(nextImage); setImageUrl(nextUrl); resetEditor()
     }
-    nextImage.onerror = () => { URL.revokeObjectURL(nextUrl); setMessage('画像を読み込めませんでした。別の画像をお試しください。') }
+    nextImage.onerror = () => { URL.revokeObjectURL(nextUrl); setMessage('loadError') }
     nextImage.src = nextUrl
   }
 
@@ -136,64 +145,72 @@ function App() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <a className="brand" href="#top" aria-label="Mosaic Studio ホーム"><span className="brand-mark"><Sparkles size={19} strokeWidth={2.2} /></span><span className="brand-copy"><strong>Mosaic</strong><b>Studio</b></span></a>
-        <div className="privacy-badge"><ShieldCheck size={16} /><span>画像はアップロードされません</span></div>
+        <a className="brand" href="#top" aria-label={t.brandAria}><span className="brand-mark"><Sparkles size={19} strokeWidth={2.2} /></span><span className="brand-copy"><strong>Mosaic</strong><b>Studio</b></span></a>
+        <div className="topbar-actions">
+          <div className="privacy-badge"><ShieldCheck size={16} /><span>{t.privacyBadge}</span></div>
+          <div className="language-switcher" role="group" aria-label={t.languageAria}>
+            <Languages size={15} aria-hidden="true" />
+            {([['ja', '日本語'], ['zh', '中文'], ['en', 'EN']] as const).map(([code, label]) => (
+              <button key={code} type="button" className={language === code ? 'active' : ''} onClick={() => setLanguage(code)} aria-pressed={language === code}>{label}</button>
+            ))}
+          </div>
+        </div>
       </header>
       <section className="hero" id="top">
-        <div className="eyebrow"><span /> かんたん・安全・無料</div>
-        <h1>隠したいところを、<br /><em>サッとモザイク。</em></h1>
-        <p>画像を選んで、隠したい範囲をなぞるだけ。<br className="desktop-break" />すべての処理がブラウザ内で完結します。</p>
+        <div className="eyebrow"><span /> {t.eyebrow}</div>
+        <h1>{t.heroTitle}<br /><em>{t.heroAccent}</em></h1>
+        <p>{t.heroLead}<br className="desktop-break" />{t.heroSub}</p>
       </section>
-      <section className={`editor-card ${hasImage ? 'has-image' : ''}`} aria-label="画像モザイク編集ツール">
+      <section className={`editor-card ${hasImage ? 'has-image' : ''}`} aria-label={t.editorAria}>
         {!hasImage ? (
           <div className={`drop-zone ${draggingFile ? 'dragging' : ''}`}
             onDragEnter={(event) => { event.preventDefault(); setDraggingFile(true) }} onDragOver={(event) => event.preventDefault()}
             onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDraggingFile(false) }}
             onDrop={(event) => { event.preventDefault(); setDraggingFile(false); acceptFile(event.dataTransfer.files[0]) }}>
             <div className="upload-illustration"><span className="image-card card-back"><ImageIcon size={26} /></span><span className="image-card card-front"><Upload size={27} /></span></div>
-            <h2>{draggingFile ? 'ここにドロップ' : '画像をここにドロップ'}</h2><p>またはボタンから画像を選択</p>
-            <button className="primary-button" type="button" onClick={() => fileInputRef.current?.click()}><ImageIcon size={18} /> 画像を選ぶ</button>
-            <span className="file-note">JPG・PNG・WebP / 端末内で処理</span>{message && <div className="error-message" role="alert">{message}</div>}
+            <h2>{draggingFile ? t.dropActive : t.dropTitle}</h2><p>{t.dropSub}</p>
+            <button className="primary-button" type="button" onClick={() => fileInputRef.current?.click()}><ImageIcon size={18} /> {t.chooseImage}</button>
+            <span className="file-note">{t.fileNote}</span>{message && <div className="error-message" role="alert">{t[message]}</div>}
           </div>
         ) : (
           <div className="editor-layout">
             <div className="canvas-panel">
-              <div className="canvas-toolbar"><div><span className="status-dot" /> 選択モード</div><span><MousePointer2 size={14} /> ドラッグして範囲を追加</span></div>
+              <div className="canvas-toolbar"><div><span className="status-dot" /> {t.selectMode}</div><span><MousePointer2 size={14} /> {t.dragAdd}</span></div>
               <div className="canvas-stage">
                 <canvas ref={canvasRef} onPointerDown={startSelection} onPointerMove={moveSelection} onPointerUp={finishSelection}
-                  onPointerCancel={() => { setDragStart(null); setDraft(null) }} aria-label="ドラッグしてモザイク範囲を選択" tabIndex={0} />
-                {rects.length === 0 && !draft && <div className="canvas-hint"><WandSparkles size={19} /> 隠したい場所をドラッグ</div>}
+                  onPointerCancel={() => { setDragStart(null); setDraft(null) }} aria-label={t.canvasAria} tabIndex={0} />
+                {rects.length === 0 && !draft && <div className="canvas-hint"><WandSparkles size={19} /> {t.canvasHint}</div>}
               </div>
               <div className="image-meta"><span>{file?.name}</span><span>{dimensions}</span></div>
             </div>
             <aside className="controls-panel">
               <div className="control-section">
-                <div className="section-title"><span>01</span><div><b>モザイクの粗さ</b><small>ブロックの大きさを調整</small></div></div>
-                <div className="range-row"><span>細かい</span><b>{pixelSize}px</b><span>粗い</span></div>
-                <input className="range" type="range" min="6" max="60" value={pixelSize} style={{ '--range-value': `${((pixelSize - 6) / 54) * 100}%` } as React.CSSProperties} onChange={(event) => setPixelSize(Number(event.target.value))} aria-label="モザイクの粗さ" />
+                <div className="section-title"><span>01</span><div><b>{t.pixelTitle}</b><small>{t.pixelSub}</small></div></div>
+                <div className="range-row"><span>{t.fine}</span><b>{pixelSize}px</b><span>{t.coarse}</span></div>
+                <input className="range" type="range" min="6" max="60" value={pixelSize} style={{ '--range-value': `${((pixelSize - 6) / 54) * 100}%` } as React.CSSProperties} onChange={(event) => setPixelSize(Number(event.target.value))} aria-label={t.pixelAria} />
               </div>
               <div className="control-section">
-                <div className="section-title"><span>02</span><div><b>範囲を編集</b><small>{rects.length}か所にモザイクを適用中</small></div></div>
-                <div className="edit-actions"><button type="button" onClick={() => setRects((current) => current.slice(0, -1))} disabled={rects.length === 0}><Undo2 size={17} /> 1つ戻す</button><button type="button" onClick={() => setRects([])} disabled={rects.length === 0}><RotateCcw size={17} /> 全て解除</button></div>
+                <div className="section-title"><span>02</span><div><b>{t.editTitle}</b><small>{t.rectsApplied(rects.length)}</small></div></div>
+                <div className="edit-actions"><button type="button" onClick={() => setRects((current) => current.slice(0, -1))} disabled={rects.length === 0}><Undo2 size={17} /> {t.undo}</button><button type="button" onClick={() => setRects([])} disabled={rects.length === 0}><RotateCcw size={17} /> {t.clearAll}</button></div>
               </div>
               <div className="control-section export-section">
-                <div className="section-title"><span>03</span><div><b>保存設定</b><small>元の解像度で書き出します</small></div></div>
-                <div className="format-toggle" aria-label="保存形式"><button type="button" className={exportType === 'image/png' ? 'active' : ''} onClick={() => setExportType('image/png')}><Check size={14} /> PNG</button><button type="button" className={exportType === 'image/jpeg' ? 'active' : ''} onClick={() => setExportType('image/jpeg')}><Check size={14} /> JPG</button></div>
-                {exportType === 'image/jpeg' && <label className="quality-row">画質 <b>{quality}%</b><input type="range" min="60" max="100" value={quality} onChange={(event) => setQuality(Number(event.target.value))} /></label>}
-                <button className="download-button" type="button" onClick={download} disabled={rects.length === 0}><Download size={19} /> モザイク画像を保存</button>
+                <div className="section-title"><span>03</span><div><b>{t.exportTitle}</b><small>{t.exportSub}</small></div></div>
+                <div className="format-toggle" aria-label={t.formatAria}><button type="button" className={exportType === 'image/png' ? 'active' : ''} onClick={() => setExportType('image/png')}><Check size={14} /> PNG</button><button type="button" className={exportType === 'image/jpeg' ? 'active' : ''} onClick={() => setExportType('image/jpeg')}><Check size={14} /> JPG</button></div>
+                {exportType === 'image/jpeg' && <label className="quality-row">{t.quality} <b>{quality}%</b><input type="range" min="60" max="100" value={quality} onChange={(event) => setQuality(Number(event.target.value))} /></label>}
+                <button className="download-button" type="button" onClick={download} disabled={rects.length === 0}><Download size={19} /> {t.saveImage}</button>
               </div>
-              <button className="remove-button" type="button" onClick={removeImage}><Trash2 size={16} /> 別の画像を選ぶ</button>
+              <button className="remove-button" type="button" onClick={removeImage}><Trash2 size={16} /> {t.chooseAnother}</button>
             </aside>
           </div>
         )}
         <input ref={fileInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => acceptFile(event.target.files?.[0])} />
       </section>
-      <section className="trust-row" aria-label="サービスの特徴">
-        <div><span><LockKeyhole size={19} /></span><p><strong>完全プライベート</strong><small>画像は外部に送信されません</small></p></div><i />
-        <div><span><WandSparkles size={19} /></span><p><strong>すぐに使える</strong><small>登録もインストールも不要</small></p></div><i />
-        <div><span><ImageIcon size={19} /></span><p><strong>元画質のまま</strong><small>解像度を保って保存</small></p></div>
+      <section className="trust-row" aria-label={t.featuresAria}>
+        <div><span><LockKeyhole size={19} /></span><p><strong>{t.privateTitle}</strong><small>{t.privateSub}</small></p></div><i />
+        <div><span><WandSparkles size={19} /></span><p><strong>{t.instantTitle}</strong><small>{t.instantSub}</small></p></div><i />
+        <div><span><ImageIcon size={19} /></span><p><strong>{t.qualityTitle}</strong><small>{t.qualitySub}</small></p></div>
       </section>
-      <footer><span>© 2026 Mosaic Studio</span><span>画像データは保存・収集されません</span></footer>
+      <footer><span>© 2026 Mosaic Studio</span><span>{t.footerPrivacy}</span></footer>
     </main>
   )
 }

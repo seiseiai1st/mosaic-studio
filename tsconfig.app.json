@@ -16,5 +16,5 @@
     "noEmit": true,
     "jsx": "react-jsx"
   },
-  "include": ["src/main.tsx", "src/App.tsx", "src/mosaic-utils.ts", "src/vite-env.d.ts"]
+  "include": ["src/main.tsx", "src/App.tsx", "src/i18n.ts", "src/mosaic-utils.ts", "src/vite-env.d.ts"]
 }
