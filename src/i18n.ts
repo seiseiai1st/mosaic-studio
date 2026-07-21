@@ -21,6 +21,12 @@ export type Translation = {
   fileNote: string
   invalidFile: string
   loadError: string
+  saving: string
+  shareSuccess: string
+  saveCancelled: string
+  saveSuccess: string
+  saveUnavailable: string
+  saveError: string
   selectMode: string
   dragAdd: string
   canvasAria: string
@@ -70,6 +76,12 @@ export const translations: Record<Language, Translation> = {
     fileNote: 'JPG・PNG・WebP / 端末内で処理',
     invalidFile: 'JPG・PNG・WebP画像を選択してください。',
     loadError: '画像を読み込めませんでした。別の画像をお試しください。',
+    saving: '保存用画像を作成中…',
+    shareSuccess: '共有メニューから画像を保存できます。',
+    saveCancelled: '保存をキャンセルしました。',
+    saveSuccess: '画像を保存しました。ダウンロード一覧をご確認ください。',
+    saveUnavailable: '画像の保存機能を利用できません。',
+    saveError: '画像を保存できませんでした。別のブラウザでお試しください。',
     selectMode: '選択モード',
     dragAdd: 'ドラッグして範囲を追加',
     canvasAria: 'ドラッグしてモザイク範囲を選択',
@@ -117,6 +129,12 @@ export const translations: Record<Language, Translation> = {
     fileNote: 'JPG・PNG・WebP / 仅在本机处理',
     invalidFile: '请选择JPG、PNG或WebP图片。',
     loadError: '无法读取图片，请尝试其他图片。',
+    saving: '正在生成保存图片…',
+    shareSuccess: '可通过分享菜单保存图片。',
+    saveCancelled: '已取消保存。',
+    saveSuccess: '图片已保存，请查看下载列表。',
+    saveUnavailable: '当前无法使用图片保存功能。',
+    saveError: '无法保存图片，请尝试其他浏览器。',
     selectMode: '选择模式',
     dragAdd: '拖动添加区域',
     canvasAria: '拖动选择马赛克区域',
@@ -164,6 +182,12 @@ export const translations: Record<Language, Translation> = {
     fileNote: 'JPG・PNG・WebP / Processed on your device',
     invalidFile: 'Please choose a JPG, PNG, or WebP image.',
     loadError: 'We could not read that image. Please try another one.',
+    saving: 'Preparing your image…',
+    shareSuccess: 'You can save the image from the share menu.',
+    saveCancelled: 'Save cancelled.',
+    saveSuccess: 'Image saved. Check your downloads.',
+    saveUnavailable: 'Image saving is not available in this browser.',
+    saveError: 'We could not save the image. Please try another browser.',
     selectMode: 'Selection mode',
     dragAdd: 'Drag to add an area',
     canvasAria: 'Drag to select an area for mosaicing',

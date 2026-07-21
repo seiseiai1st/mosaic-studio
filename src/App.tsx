@@ -4,6 +4,7 @@ import { getInitialLanguage, LANGUAGE_STORAGE_KEY, translations, type Language }
 import { clampRect, normalizeRect, type MosaicRect, type Point } from './mosaic-utils'
 
 type ExportType = 'image/png' | 'image/jpeg'
+type MessageKey = 'invalidFile' | 'loadError' | 'shareSuccess' | 'saveCancelled' | 'saveSuccess' | 'saveUnavailable' | 'saveError'
 const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 
 function drawMosaic(context: CanvasRenderingContext2D, image: HTMLImageElement, rects: MosaicRect[], pixelSize: number, whiteBackground = false) {
@@ -32,6 +33,32 @@ function drawMosaic(context: CanvasRenderingContext2D, image: HTMLImageElement, 
   }
 }
 
+function canvasToBlob(canvas: HTMLCanvasElement, type: ExportType, quality: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob)
+      else reject(new Error('画像を書き出せませんでした。'))
+    }, type, quality)
+  })
+}
+
+function triggerDownload(blob: Blob, fileName: string) {
+  const blobUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = blobUrl
+  link.download = fileName
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  // Safari may still be reading the Blob after click() returns.
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000)
+}
+
+function isMobileLikeDevice() {
+  return navigator.maxTouchPoints > 0 || window.matchMedia?.('(pointer: coarse)').matches
+}
+
 function App() {
   const [language, setLanguage] = useState<Language>(() => getInitialLanguage(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)))
   const [file, setFile] = useState<File | null>(null)
@@ -44,7 +71,8 @@ function App() {
   const [exportType, setExportType] = useState<ExportType>('image/png')
   const [quality, setQuality] = useState(92)
   const [draggingFile, setDraggingFile] = useState(false)
-  const [message, setMessage] = useState<'invalidFile' | 'loadError' | ''>('')
+  const [message, setMessage] = useState<MessageKey | ''>('')
+  const [isSaving, setIsSaving] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const downloadCanvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -125,16 +153,50 @@ function App() {
     setDragStart(null); setDraft(null)
   }
 
-  const download = () => {
-    if (!image) return
-    const canvas = downloadCanvasRef.current || document.createElement('canvas')
-    downloadCanvasRef.current = canvas
-    canvas.width = image.naturalWidth; canvas.height = image.naturalHeight
-    const context = canvas.getContext('2d')
-    if (!context) return
-    drawMosaic(context, image, rects, pixelSize, exportType === 'image/jpeg')
-    const link = document.createElement('a')
-    link.download = outputName; link.href = canvas.toDataURL(exportType, quality / 100); link.click()
+  const download = async () => {
+    if (!image || isSaving) return
+    setIsSaving(true)
+    setMessage('')
+    try {
+      const canvas = downloadCanvasRef.current || document.createElement('canvas')
+      downloadCanvasRef.current = canvas
+      canvas.width = image.naturalWidth; canvas.height = image.naturalHeight
+      const context = canvas.getContext('2d')
+      if (!context) { setMessage('saveUnavailable'); return }
+      drawMosaic(context, image, rects, pixelSize, exportType === 'image/jpeg')
+
+      const blob = await canvasToBlob(canvas, exportType, quality / 100)
+      let shareData: ShareData | null = null
+      if (isMobileLikeDevice() && typeof navigator.share === 'function' && typeof File === 'function') {
+        shareData = { files: [new File([blob], outputName, { type: exportType })], title: outputName }
+        try {
+          if (typeof navigator.canShare === 'function' && !navigator.canShare(shareData)) shareData = null
+        } catch {
+          shareData = null
+        }
+      }
+
+      if (shareData) {
+        try {
+          await navigator.share(shareData)
+          setMessage('shareSuccess')
+          return
+        } catch (error) {
+          if (error instanceof DOMException && error.name === 'AbortError') {
+            setMessage('saveCancelled')
+            return
+          }
+          // Some embedded mobile browsers expose share() but reject files.
+        }
+      }
+
+      triggerDownload(blob, outputName)
+      setMessage('saveSuccess')
+    } catch {
+      setMessage('saveError')
+    } finally {
+      setIsSaving(false)
+    }
   }
   const removeImage = () => {
     if (imageUrl) URL.revokeObjectURL(imageUrl)
@@ -197,7 +259,8 @@ function App() {
                 <div className="section-title"><span>03</span><div><b>{t.exportTitle}</b><small>{t.exportSub}</small></div></div>
                 <div className="format-toggle" aria-label={t.formatAria}><button type="button" className={exportType === 'image/png' ? 'active' : ''} onClick={() => setExportType('image/png')}><Check size={14} /> PNG</button><button type="button" className={exportType === 'image/jpeg' ? 'active' : ''} onClick={() => setExportType('image/jpeg')}><Check size={14} /> JPG</button></div>
                 {exportType === 'image/jpeg' && <label className="quality-row">{t.quality} <b>{quality}%</b><input type="range" min="60" max="100" value={quality} onChange={(event) => setQuality(Number(event.target.value))} /></label>}
-                <button className="download-button" type="button" onClick={download} disabled={rects.length === 0}><Download size={19} /> {t.saveImage}</button>
+                <button className="download-button" type="button" onClick={download} disabled={rects.length === 0 || isSaving}><Download size={19} /> {isSaving ? t.saving : t.saveImage}</button>
+                {message && <div className="save-message" role="status">{t[message]}</div>}
               </div>
               <button className="remove-button" type="button" onClick={removeImage}><Trash2 size={16} /> {t.chooseAnother}</button>
             </aside>
