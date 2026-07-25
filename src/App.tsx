@@ -18,7 +18,9 @@ import {
   DEFAULT_SETTINGS,
   PALETTES,
   renderTrickArt,
+  TRICK_PRESETS,
   type PaletteId,
+  type TrickPresetId,
   type TrickSettings,
 } from './trick-utils'
 
@@ -139,6 +141,17 @@ function App() {
     setNotice('')
   }
 
+  const applyPreset = (preset: TrickPresetId) => {
+    const recommendation = TRICK_PRESETS.find((item) => item.id === preset) ?? TRICK_PRESETS[0]
+    setSettings((current) => ({
+      ...current,
+      preset,
+      hiddenness: recommendation.hiddenness,
+      glow: recommendation.glow,
+    }))
+    setNotice('')
+  }
+
   const exportImage = async () => {
     if (!source || saving) return
     setSaving(true)
@@ -190,7 +203,7 @@ function App() {
       <section className="hero" id="top">
         <div className="eyebrow"><Zap size={14} fill="currentColor" /> 4K HIDDEN IMAGE MAKER</div>
         <h1>スクロールでは、見えない。<br /><em>長押しで、現れる。</em></h1>
-        <p>画像を1枚選ぶだけ。Xで話題の「長押しすると浮かび上がる」<br className="desktop-only" />ネオン・トリックアートを、ブラウザだけで作れます。</p>
+        <p>普通の写真も、画像を1枚選ぶだけで自動補正。Xで話題の<br className="desktop-only" />「長押しすると浮かび上がる」トリックアートに変換します。</p>
       </section>
 
       {!source ? (
@@ -211,7 +224,7 @@ function App() {
           </div>
           <span className="step-pill">STEP 01</span>
           <h2>{dragging ? 'ここにドロップ' : '元になる画像を選ぶ'}</h2>
-          <p>明暗がはっきりした人物・イラストほど、きれいに隠れます。</p>
+          <p>普通の写真もOK。明暗・輪郭・主役位置を自動で最適化します。</p>
           <button className="primary-button" type="button" onClick={() => fileInput.current?.click()}>
             <Upload size={18} /> 画像を選択
           </button>
@@ -244,7 +257,7 @@ function App() {
               <div className="press-hint"><MousePointer2 size={16} /> 押している間だけ原寸プレビュー</div>
             </div>
             <div className="preview-meta">
-              <span><i className="status-dot" /> READY FOR X</span>
+              <span><i className="status-dot" /> AUTO ENHANCED</span>
               <span>{outputSize}・PNG</span>
             </div>
           </div>
@@ -253,7 +266,29 @@ function App() {
             <div className="control-heading">
               <span className="step-pill">STEP 02</span>
               <h2>見え方を調整</h2>
-              <p>まずは標準設定のまま、長押しプレビューを試してください。</p>
+              <p>「おまかせ」が画像を自動解析します。用途が決まっていればプリセットを選べます。</p>
+            </div>
+
+            <div className="control-group preset-section">
+              <div className="label-row">
+                <label>自動変換モード</label>
+                <b><WandSparkles size={11} /> AUTO</b>
+              </div>
+              <div className="preset-grid">
+                {TRICK_PRESETS.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={settings.preset === item.id ? 'active' : ''}
+                    onClick={() => applyPreset(item.id)}
+                    aria-pressed={settings.preset === item.id}
+                  >
+                    <span>{item.name}</span>
+                    <small>{item.description}</small>
+                    {settings.preset === item.id && <Check size={14} />}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="control-group">
