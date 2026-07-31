@@ -1,14 +1,13 @@
 {
-  "name": "neon-reveal",
+  "name": "mosaic-studio",
   "private": true,
   "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "build:pages": "tsc -b && vite build --base=/mosaic-studio/",
     "lint": "eslint .",
-    "test": "vitest run src/mosaic-utils.test.ts src/i18n.test.ts src/trick-utils.test.ts"
+    "test": "vitest run src/mosaic-utils.test.ts src/i18n.test.ts"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

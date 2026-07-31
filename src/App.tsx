@@ -1,355 +1,280 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  Check,
-  Download,
-  Eye,
-  EyeOff,
-  ImagePlus,
-  LockKeyhole,
-  MousePointer2,
-  RefreshCcw,
-  Share2,
-  Sparkles,
-  Upload,
-  WandSparkles,
-  Zap,
-} from 'lucide-react'
-import {
-  DEFAULT_SETTINGS,
-  PALETTES,
-  renderTrickArt,
-  TRICK_PRESETS,
-  type PaletteId,
-  type TrickPresetId,
-  type TrickSettings,
-} from './trick-utils'
+import { Check, Download, Image as ImageIcon, Languages, LockKeyhole, MousePointer2, RotateCcw, ShieldCheck, Sparkles, Trash2, Undo2, Upload, WandSparkles } from 'lucide-react'
+import { getInitialLanguage, LANGUAGE_STORAGE_KEY, translations, type Language } from './i18n'
+import { clampRect, normalizeRect, type MosaicRect, type Point } from './mosaic-utils'
 
+type ExportType = 'image/png' | 'image/jpeg'
+type MessageKey = 'invalidFile' | 'loadError' | 'shareSuccess' | 'saveCancelled' | 'saveSuccess' | 'saveUnavailable' | 'saveError'
 const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
-type PreviewMode = 'timeline' | 'reveal'
-type Notice = 'invalid' | 'loadError' | 'saved' | 'shared' | 'saveError' | ''
 
-const noticeText: Record<Exclude<Notice, ''>, string> = {
-  invalid: 'JPG・PNG・WebP画像を選んでください。',
-  loadError: '画像を読み込めませんでした。別の画像をお試しください。',
-  saved: '4K PNGを保存しました。',
-  shared: '共有メニューを開きました。',
-  saveError: '画像を保存できませんでした。',
+function drawMosaic(context: CanvasRenderingContext2D, image: HTMLImageElement, rects: MosaicRect[], pixelSize: number, whiteBackground = false) {
+  context.clearRect(0, 0, context.canvas.width, context.canvas.height)
+  if (whiteBackground) {
+    context.fillStyle = '#ffffff'
+    context.fillRect(0, 0, context.canvas.width, context.canvas.height)
+  }
+  context.drawImage(image, 0, 0)
+  for (const rawRect of rects) {
+    const rect = clampRect(rawRect, context.canvas.width, context.canvas.height)
+    if (rect.width < 1 || rect.height < 1) continue
+    const sampleWidth = Math.max(1, Math.ceil(rect.width / pixelSize))
+    const sampleHeight = Math.max(1, Math.ceil(rect.height / pixelSize))
+    const buffer = document.createElement('canvas')
+    buffer.width = sampleWidth
+    buffer.height = sampleHeight
+    const bufferContext = buffer.getContext('2d')
+    if (!bufferContext) continue
+    bufferContext.imageSmoothingEnabled = true
+    bufferContext.drawImage(image, rect.x, rect.y, rect.width, rect.height, 0, 0, sampleWidth, sampleHeight)
+    context.save()
+    context.imageSmoothingEnabled = false
+    context.drawImage(buffer, 0, 0, sampleWidth, sampleHeight, rect.x, rect.y, rect.width, rect.height)
+    context.restore()
+  }
 }
 
-function canvasToBlob(canvas: HTMLCanvasElement) {
-  return new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('PNG export failed'))), 'image/png')
+function canvasToBlob(canvas: HTMLCanvasElement, type: ExportType, quality: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob)
+      else reject(new Error('画像を書き出せませんでした。'))
+    }, type, quality)
   })
 }
 
-function downloadBlob(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob)
+function triggerDownload(blob: Blob, fileName: string) {
+  const blobUrl = URL.createObjectURL(blob)
   const link = document.createElement('a')
-  link.href = url
-  link.download = name
+  link.href = blobUrl
+  link.download = fileName
+  link.style.display = 'none'
   document.body.appendChild(link)
   link.click()
   link.remove()
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  // Safari may still be reading the Blob after click() returns.
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000)
+}
+
+function isMobileLikeDevice() {
+  return navigator.maxTouchPoints > 0 || window.matchMedia?.('(pointer: coarse)').matches
 }
 
 function App() {
-  const [source, setSource] = useState<HTMLImageElement | null>(null)
-  const [sourceFile, setSourceFile] = useState<File | null>(null)
-  const [sourceUrl, setSourceUrl] = useState('')
-  const [settings, setSettings] = useState<TrickSettings>(DEFAULT_SETTINGS)
-  const [mode, setMode] = useState<PreviewMode>('timeline')
-  const [pressing, setPressing] = useState(false)
-  const [dragging, setDragging] = useState(false)
-  const [notice, setNotice] = useState<Notice>('')
-  const [rendering, setRendering] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const outputCanvas = useRef<HTMLCanvasElement>(null)
-  const previewCanvas = useRef<HTMLCanvasElement>(null)
-  const fileInput = useRef<HTMLInputElement>(null)
-  const renderFrame = useRef(0)
+  const [language, setLanguage] = useState<Language>(() => getInitialLanguage(window.localStorage.getItem(LANGUAGE_STORAGE_KEY)))
+  const [file, setFile] = useState<File | null>(null)
+  const [image, setImage] = useState<HTMLImageElement | null>(null)
+  const [imageUrl, setImageUrl] = useState('')
+  const [rects, setRects] = useState<MosaicRect[]>([])
+  const [draft, setDraft] = useState<MosaicRect | null>(null)
+  const [dragStart, setDragStart] = useState<Point | null>(null)
+  const [pixelSize, setPixelSize] = useState(18)
+  const [exportType, setExportType] = useState<ExportType>('image/png')
+  const [quality, setQuality] = useState(92)
+  const [draggingFile, setDraggingFile] = useState(false)
+  const [message, setMessage] = useState<MessageKey | ''>('')
+  const [isSaving, setIsSaving] = useState(false)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const downloadCanvasRef = useRef<HTMLCanvasElement | null>(null)
 
-  const activeMode = pressing ? 'reveal' : mode
-  const palette = PALETTES.find((item) => item.id === settings.palette) ?? PALETTES[0]
-  const outputSize = useMemo(() => {
-    if (!source) return ''
-    const scale = settings.longSide / Math.max(source.naturalWidth, source.naturalHeight)
-    return `${Math.round(source.naturalWidth * scale).toLocaleString()} × ${Math.round(source.naturalHeight * scale).toLocaleString()} px`
-  }, [settings.longSide, source])
+  const hasImage = Boolean(image)
+  const t = translations[language]
+  const dimensions = image ? `${image.naturalWidth.toLocaleString()} × ${image.naturalHeight.toLocaleString()} px` : ''
+  const outputName = useMemo(() => {
+    const base = file?.name.replace(/\.[^.]+$/, '') || 'mosaic-image'
+    return `${base}-mosaic.${exportType === 'image/png' ? 'png' : 'jpg'}`
+  }, [file, exportType])
 
-  const paintPreview = useCallback(() => {
-    const output = outputCanvas.current
-    const preview = previewCanvas.current
-    if (!output || !preview || !output.width) return
-    const maxLongSide = activeMode === 'timeline' ? 468 : 1280
-    const scale = Math.min(1, maxLongSide / Math.max(output.width, output.height))
-    preview.width = Math.max(1, Math.round(output.width * scale))
-    preview.height = Math.max(1, Math.round(output.height * scale))
-    const context = preview.getContext('2d')
+  const renderCanvas = useCallback(() => {
+    const canvas = canvasRef.current
+    if (!canvas || !image) return
+    if (canvas.width !== image.naturalWidth || canvas.height !== image.naturalHeight) {
+      canvas.width = image.naturalWidth
+      canvas.height = image.naturalHeight
+    }
+    const context = canvas.getContext('2d')
     if (!context) return
-    context.imageSmoothingEnabled = activeMode === 'timeline'
-    context.imageSmoothingQuality = 'high'
-    context.clearRect(0, 0, preview.width, preview.height)
-    context.drawImage(output, 0, 0, preview.width, preview.height)
-  }, [activeMode])
+    drawMosaic(context, image, rects, pixelSize)
+    if (draft) {
+      context.save()
+      context.fillStyle = 'rgba(108, 92, 231, 0.18)'
+      context.strokeStyle = '#6c5ce7'
+      context.lineWidth = Math.max(2, image.naturalWidth / 600)
+      context.setLineDash([10, 7])
+      context.fillRect(draft.x, draft.y, draft.width, draft.height)
+      context.strokeRect(draft.x, draft.y, draft.width, draft.height)
+      context.restore()
+    }
+  }, [draft, image, pixelSize, rects])
 
+  useEffect(() => renderCanvas(), [renderCanvas])
+  useEffect(() => () => { if (imageUrl) URL.revokeObjectURL(imageUrl) }, [imageUrl])
   useEffect(() => {
-    if (!source || !outputCanvas.current) return
-    window.cancelAnimationFrame(renderFrame.current)
-    setRendering(true)
-    renderFrame.current = window.requestAnimationFrame(() => {
-      const canvas = outputCanvas.current
-      if (!canvas) return
-      renderTrickArt(canvas, source, { ...settings, longSide: Math.min(1280, settings.longSide) })
-      paintPreview()
-      setRendering(false)
-    })
-    return () => window.cancelAnimationFrame(renderFrame.current)
-  }, [paintPreview, settings, source])
+    document.documentElement.lang = language === 'zh' ? 'zh-CN' : language
+    document.title = t.metaTitle
+    document.querySelector('meta[name="description"]')?.setAttribute('content', t.metaDescription)
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language)
+  }, [language, t.metaDescription, t.metaTitle])
 
-  useEffect(() => paintPreview(), [paintPreview])
-  useEffect(() => () => {
-    if (sourceUrl) URL.revokeObjectURL(sourceUrl)
-  }, [sourceUrl])
+  const resetEditor = () => { setRects([]); setDraft(null); setDragStart(null); setMessage('') }
 
   const acceptFile = (candidate?: File) => {
     if (!candidate) return
-    if (!ACCEPTED_TYPES.includes(candidate.type)) {
-      setNotice('invalid')
-      return
-    }
-    if (sourceUrl) URL.revokeObjectURL(sourceUrl)
+    if (!ACCEPTED_TYPES.includes(candidate.type)) { setMessage('invalidFile'); return }
+    if (imageUrl) URL.revokeObjectURL(imageUrl)
     const nextUrl = URL.createObjectURL(candidate)
-    const image = new Image()
-    image.onload = () => {
-      setSource(image)
-      setSourceFile(candidate)
-      setSourceUrl(nextUrl)
-      setSettings(DEFAULT_SETTINGS)
-      setMode('timeline')
-      setNotice('')
+    const nextImage = new Image()
+    nextImage.onload = () => {
+      const canvas = canvasRef.current
+      if (canvas) { canvas.width = nextImage.naturalWidth; canvas.height = nextImage.naturalHeight }
+      setFile(candidate); setImage(nextImage); setImageUrl(nextUrl); resetEditor()
     }
-    image.onerror = () => {
-      URL.revokeObjectURL(nextUrl)
-      setNotice('loadError')
-    }
-    image.src = nextUrl
+    nextImage.onerror = () => { URL.revokeObjectURL(nextUrl); setMessage('loadError') }
+    nextImage.src = nextUrl
   }
 
-  const updateSetting = <K extends keyof TrickSettings>(key: K, value: TrickSettings[K]) => {
-    setSettings((current) => ({ ...current, [key]: value }))
-    setNotice('')
+  const pointFromEvent = (event: React.PointerEvent<HTMLCanvasElement>): Point => {
+    const canvas = event.currentTarget
+    const bounds = canvas.getBoundingClientRect()
+    return { x: ((event.clientX - bounds.left) / bounds.width) * canvas.width, y: ((event.clientY - bounds.top) / bounds.height) * canvas.height }
+  }
+  const startSelection = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!image) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const point = pointFromEvent(event)
+    setDragStart(point); setDraft({ x: point.x, y: point.y, width: 0, height: 0 }); setMessage('')
+  }
+  const moveSelection = (event: React.PointerEvent<HTMLCanvasElement>) => { if (dragStart) setDraft(normalizeRect(dragStart, pointFromEvent(event))) }
+  const finishSelection = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!dragStart) return
+    const rect = normalizeRect(dragStart, pointFromEvent(event))
+    const minimum = image ? Math.max(4, image.naturalWidth * 0.005) : 4
+    if (rect.width >= minimum && rect.height >= minimum) setRects((current) => [...current, rect])
+    setDragStart(null); setDraft(null)
   }
 
-  const applyPreset = (preset: TrickPresetId) => {
-    const recommendation = TRICK_PRESETS.find((item) => item.id === preset) ?? TRICK_PRESETS[0]
-    setSettings((current) => ({
-      ...current,
-      preset,
-      hiddenness: recommendation.hiddenness,
-      glow: recommendation.glow,
-    }))
-    setNotice('')
-  }
-
-  const exportImage = async () => {
-    if (!source || saving) return
-    setSaving(true)
-    setNotice('')
+  const download = async () => {
+    if (!image || isSaving) return
+    setIsSaving(true)
+    setMessage('')
     try {
-      const exportCanvas = document.createElement('canvas')
-      renderTrickArt(exportCanvas, source, settings)
-      const blob = await canvasToBlob(exportCanvas)
-      const base = sourceFile?.name.replace(/\.[^.]+$/, '') || 'trick-art'
-      const name = `${base}-neon-reveal.png`
-      const file = new File([blob], name, { type: 'image/png' })
-      if (navigator.maxTouchPoints > 0 && navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
+      const canvas = downloadCanvasRef.current || document.createElement('canvas')
+      downloadCanvasRef.current = canvas
+      canvas.width = image.naturalWidth; canvas.height = image.naturalHeight
+      const context = canvas.getContext('2d')
+      if (!context) { setMessage('saveUnavailable'); return }
+      drawMosaic(context, image, rects, pixelSize, exportType === 'image/jpeg')
+
+      const blob = await canvasToBlob(canvas, exportType, quality / 100)
+      let shareData: ShareData | null = null
+      if (isMobileLikeDevice() && typeof navigator.share === 'function' && typeof File === 'function') {
+        shareData = { files: [new File([blob], outputName, { type: exportType })], title: outputName }
         try {
-          await navigator.share({ files: [file], title: name })
-          setNotice('shared')
-          return
-        } catch (error) {
-          if (error instanceof DOMException && error.name === 'AbortError') return
+          if (typeof navigator.canShare === 'function' && !navigator.canShare(shareData)) shareData = null
+        } catch {
+          shareData = null
         }
       }
-      downloadBlob(blob, name)
-      setNotice('saved')
+
+      if (shareData) {
+        try {
+          await navigator.share(shareData)
+          setMessage('shareSuccess')
+          return
+        } catch (error) {
+          if (error instanceof DOMException && error.name === 'AbortError') {
+            setMessage('saveCancelled')
+            return
+          }
+          // Some embedded mobile browsers expose share() but reject files.
+        }
+      }
+
+      triggerDownload(blob, outputName)
+      setMessage('saveSuccess')
     } catch {
-      setNotice('saveError')
+      setMessage('saveError')
     } finally {
-      setSaving(false)
+      setIsSaving(false)
     }
   }
-
-  const reset = () => {
-    if (sourceUrl) URL.revokeObjectURL(sourceUrl)
-    setSource(null)
-    setSourceFile(null)
-    setSourceUrl('')
-    setNotice('')
-    if (fileInput.current) fileInput.current.value = ''
+  const removeImage = () => {
+    if (imageUrl) URL.revokeObjectURL(imageUrl)
+    setFile(null); setImage(null); setImageUrl(''); resetEditor()
+    if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   return (
     <main className="app-shell">
       <header className="topbar">
-        <a className="brand" href="#top" aria-label="Neon Reveal ホーム">
-          <span className="brand-mark"><Sparkles size={19} /></span>
-          <span><strong>NEON</strong> REVEAL</span>
-        </a>
-        <div className="privacy-badge"><LockKeyhole size={15} /> 画像はアップロードされません</div>
+        <a className="brand" href="#top" aria-label={t.brandAria}><span className="brand-mark"><Sparkles size={19} strokeWidth={2.2} /></span><span className="brand-copy"><strong>Mosaic</strong><b>Studio</b></span></a>
+        <div className="topbar-actions">
+          <div className="privacy-badge"><ShieldCheck size={16} /><span>{t.privacyBadge}</span></div>
+          <div className="language-switcher" role="group" aria-label={t.languageAria}>
+            <Languages size={15} aria-hidden="true" />
+            {([['ja', '日本語'], ['zh', '中文'], ['en', 'EN']] as const).map(([code, label]) => (
+              <button key={code} type="button" className={language === code ? 'active' : ''} onClick={() => setLanguage(code)} aria-pressed={language === code}>{label}</button>
+            ))}
+          </div>
+        </div>
       </header>
-
       <section className="hero" id="top">
-        <div className="eyebrow"><Zap size={14} fill="currentColor" /> 4K HIDDEN IMAGE MAKER</div>
-        <h1>スクロールでは、見えない。<br /><em>長押しで、現れる。</em></h1>
-        <p>普通の写真も、画像を1枚選ぶだけで自動補正。Xで話題の<br className="desktop-only" />「長押しすると浮かび上がる」トリックアートに変換します。</p>
+        <div className="eyebrow"><span /> {t.eyebrow}</div>
+        <h1>{t.heroTitle}<br /><em>{t.heroAccent}</em></h1>
+        <p>{t.heroLead}<br className="desktop-break" />{t.heroSub}</p>
       </section>
-
-      {!source ? (
-        <section
-          className={`upload-card ${dragging ? 'dragging' : ''}`}
-          onDragEnter={(event) => { event.preventDefault(); setDragging(true) }}
-          onDragOver={(event) => event.preventDefault()}
-          onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false) }}
-          onDrop={(event) => {
-            event.preventDefault()
-            setDragging(false)
-            acceptFile(event.dataTransfer.files[0])
-          }}
-        >
-          <div className="upload-orbit">
-            <span className="orbit-ring" />
-            <span className="upload-icon"><ImagePlus size={32} /></span>
+      <section className={`editor-card ${hasImage ? 'has-image' : ''}`} aria-label={t.editorAria}>
+        {!hasImage ? (
+          <div className={`drop-zone ${draggingFile ? 'dragging' : ''}`}
+            onDragEnter={(event) => { event.preventDefault(); setDraggingFile(true) }} onDragOver={(event) => event.preventDefault()}
+            onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDraggingFile(false) }}
+            onDrop={(event) => { event.preventDefault(); setDraggingFile(false); acceptFile(event.dataTransfer.files[0]) }}>
+            <div className="upload-illustration"><span className="image-card card-back"><ImageIcon size={26} /></span><span className="image-card card-front"><Upload size={27} /></span></div>
+            <h2>{draggingFile ? t.dropActive : t.dropTitle}</h2><p>{t.dropSub}</p>
+            <button className="primary-button" type="button" onClick={() => fileInputRef.current?.click()}><ImageIcon size={18} /> {t.chooseImage}</button>
+            <span className="file-note">{t.fileNote}</span>{message && <div className="error-message" role="alert">{t[message]}</div>}
           </div>
-          <span className="step-pill">STEP 01</span>
-          <h2>{dragging ? 'ここにドロップ' : '元になる画像を選ぶ'}</h2>
-          <p>普通の写真もOK。明暗・輪郭・主役位置を自動で最適化します。</p>
-          <button className="primary-button" type="button" onClick={() => fileInput.current?.click()}>
-            <Upload size={18} /> 画像を選択
-          </button>
-          <small>JPG / PNG / WebP ・ 最大解像度の画像がおすすめ</small>
-          {notice && <div className="notice error" role="alert">{noticeText[notice]}</div>}
-        </section>
-      ) : (
-        <section className="studio" aria-label="トリックアート編集スタジオ">
-          <div className="preview-panel">
-            <div className="preview-header">
-              <div>
-                <span className="step-pill">LIVE PREVIEW</span>
-                <h2>{activeMode === 'timeline' ? 'タイムラインでの見え方' : '長押し後の見え方'}</h2>
+        ) : (
+          <div className="editor-layout">
+            <div className="canvas-panel">
+              <div className="canvas-toolbar"><div><span className="status-dot" /> {t.selectMode}</div><span><MousePointer2 size={14} /> {t.dragAdd}</span></div>
+              <div className="canvas-stage">
+                <canvas ref={canvasRef} onPointerDown={startSelection} onPointerMove={moveSelection} onPointerUp={finishSelection}
+                  onPointerCancel={() => { setDragStart(null); setDraft(null) }} aria-label={t.canvasAria} tabIndex={0} />
+                {rects.length === 0 && !draft && <div className="canvas-hint"><WandSparkles size={19} /> {t.canvasHint}</div>}
               </div>
-              <div className="mode-toggle" role="group" aria-label="プレビュー表示">
-                <button type="button" className={mode === 'timeline' ? 'active' : ''} onClick={() => setMode('timeline')}><EyeOff size={15} /> 縮小</button>
-                <button type="button" className={mode === 'reveal' ? 'active' : ''} onClick={() => setMode('reveal')}><Eye size={15} /> 原寸</button>
+              <div className="image-meta"><span>{file?.name}</span><span>{dimensions}</span></div>
+            </div>
+            <aside className="controls-panel">
+              <div className="control-section">
+                <div className="section-title"><span>01</span><div><b>{t.pixelTitle}</b><small>{t.pixelSub}</small></div></div>
+                <div className="range-row"><span>{t.fine}</span><b>{pixelSize}px</b><span>{t.coarse}</span></div>
+                <input className="range" type="range" min="6" max="60" value={pixelSize} style={{ '--range-value': `${((pixelSize - 6) / 54) * 100}%` } as React.CSSProperties} onChange={(event) => setPixelSize(Number(event.target.value))} aria-label={t.pixelAria} />
               </div>
-            </div>
-            <div
-              className={`preview-stage ${activeMode}`}
-              onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); setPressing(true) }}
-              onPointerUp={() => setPressing(false)}
-              onPointerCancel={() => setPressing(false)}
-              onPointerLeave={() => setPressing(false)}
-            >
-              <div className="preview-glow" style={{ '--accent': palette.primary } as React.CSSProperties} />
-              <canvas ref={previewCanvas} aria-label="生成画像プレビュー" />
-              {rendering && <div className="rendering"><WandSparkles size={18} /> 生成中...</div>}
-              <div className="press-hint"><MousePointer2 size={16} /> 押している間だけ原寸プレビュー</div>
-            </div>
-            <div className="preview-meta">
-              <span><i className="status-dot" /> AUTO ENHANCED</span>
-              <span>{outputSize}・PNG</span>
-            </div>
+              <div className="control-section">
+                <div className="section-title"><span>02</span><div><b>{t.editTitle}</b><small>{t.rectsApplied(rects.length)}</small></div></div>
+                <div className="edit-actions"><button type="button" onClick={() => setRects((current) => current.slice(0, -1))} disabled={rects.length === 0}><Undo2 size={17} /> {t.undo}</button><button type="button" onClick={() => setRects([])} disabled={rects.length === 0}><RotateCcw size={17} /> {t.clearAll}</button></div>
+              </div>
+              <div className="control-section export-section">
+                <div className="section-title"><span>03</span><div><b>{t.exportTitle}</b><small>{t.exportSub}</small></div></div>
+                <div className="format-toggle" aria-label={t.formatAria}><button type="button" className={exportType === 'image/png' ? 'active' : ''} onClick={() => setExportType('image/png')}><Check size={14} /> PNG</button><button type="button" className={exportType === 'image/jpeg' ? 'active' : ''} onClick={() => setExportType('image/jpeg')}><Check size={14} /> JPG</button></div>
+                {exportType === 'image/jpeg' && <label className="quality-row">{t.quality} <b>{quality}%</b><input type="range" min="60" max="100" value={quality} onChange={(event) => setQuality(Number(event.target.value))} /></label>}
+                <button className="download-button" type="button" onClick={download} disabled={rects.length === 0 || isSaving}><Download size={19} /> {isSaving ? t.saving : t.saveImage}</button>
+                {message && <div className="save-message" role="status">{t[message]}</div>}
+              </div>
+              <button className="remove-button" type="button" onClick={removeImage}><Trash2 size={16} /> {t.chooseAnother}</button>
+            </aside>
           </div>
-
-          <aside className="controls">
-            <div className="control-heading">
-              <span className="step-pill">STEP 02</span>
-              <h2>見え方を調整</h2>
-              <p>「おまかせ」が画像を自動解析します。用途が決まっていればプリセットを選べます。</p>
-            </div>
-
-            <div className="control-group preset-section">
-              <div className="label-row">
-                <label>自動変換モード</label>
-                <b><WandSparkles size={11} /> AUTO</b>
-              </div>
-              <div className="preset-grid">
-                {TRICK_PRESETS.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className={settings.preset === item.id ? 'active' : ''}
-                    onClick={() => applyPreset(item.id)}
-                    aria-pressed={settings.preset === item.id}
-                  >
-                    <span>{item.name}</span>
-                    <small>{item.description}</small>
-                    {settings.preset === item.id && <Check size={14} />}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="control-group">
-              <div className="label-row"><label>隠れ具合</label><b>{settings.hiddenness}%</b></div>
-              <input type="range" min="55" max="94" value={settings.hiddenness} onChange={(event) => updateSetting('hiddenness', Number(event.target.value))} style={{ '--value': `${((settings.hiddenness - 55) / 39) * 100}%` } as React.CSSProperties} />
-              <div className="range-ends"><span>見えやすい</span><span>しっかり隠す</span></div>
-            </div>
-
-            <div className="control-group">
-              <div className="label-row"><label>発光アクセント</label><b>{settings.glow}%</b></div>
-              <input type="range" min="10" max="90" value={settings.glow} onChange={(event) => updateSetting('glow', Number(event.target.value))} style={{ '--value': `${((settings.glow - 10) / 80) * 100}%` } as React.CSSProperties} />
-              <div className="range-ends"><span>控えめ</span><span>ネオン強め</span></div>
-            </div>
-
-            <div className="control-group">
-              <div className="label-row"><label>カラーパレット</label></div>
-              <div className="palette-grid">
-                {PALETTES.map((item) => (
-                  <button key={item.id} type="button" className={settings.palette === item.id ? 'active' : ''} onClick={() => updateSetting('palette', item.id as PaletteId)}>
-                    <span style={{ background: `linear-gradient(135deg,${item.primary},${item.secondary})` }} />
-                    <small>{item.name}</small>
-                    {settings.palette === item.id && <Check size={13} />}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="control-group output-group">
-              <div className="label-row"><label>出力サイズ</label></div>
-              <div className="size-toggle">
-                {[2048, 4096].map((size) => (
-                  <button type="button" key={size} className={settings.longSide === size ? 'active' : ''} onClick={() => updateSetting('longSide', size)}>
-                    {size === 4096 ? '4K 推奨' : '2K 軽量'}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <button className="download-button" type="button" onClick={exportImage} disabled={saving || rendering}>
-              {navigator.maxTouchPoints > 0 ? <Share2 size={19} /> : <Download size={19} />}
-              {saving ? '書き出し中...' : '4K PNGを書き出す'}
-            </button>
-            {notice && <div className={`notice ${notice === 'saveError' ? 'error' : ''}`} role="status">{noticeText[notice]}</div>}
-            <button className="reset-button" type="button" onClick={reset}><RefreshCcw size={15} /> 別の画像で作る</button>
-          </aside>
-          <canvas ref={outputCanvas} className="output-canvas" aria-hidden="true" />
-        </section>
-      )}
-
-      <section className="how-it-works">
-        <div><span>01</span><strong>画像を選ぶ</strong><small>人物もイラストもOK</small></div>
-        <i />
-        <div><span>02</span><strong>見え方を調整</strong><small>縮小と原寸を比較</small></div>
-        <i />
-        <div><span>03</span><strong>Xにポスト</strong><small>PNGをそのまま投稿</small></div>
+        )}
+        <input ref={fileInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => acceptFile(event.target.files?.[0])} />
       </section>
-
-      <footer><span>NEON REVEAL</span><span>すべての画像処理は、この端末内で完結します。</span></footer>
-      <input ref={fileInput} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => acceptFile(event.target.files?.[0])} />
+      <section className="trust-row" aria-label={t.featuresAria}>
+        <div><span><LockKeyhole size={19} /></span><p><strong>{t.privateTitle}</strong><small>{t.privateSub}</small></p></div><i />
+        <div><span><WandSparkles size={19} /></span><p><strong>{t.instantTitle}</strong><small>{t.instantSub}</small></p></div><i />
+        <div><span><ImageIcon size={19} /></span><p><strong>{t.qualityTitle}</strong><small>{t.qualitySub}</small></p></div>
+      </section>
+      <footer><span>© 2026 Mosaic Studio</span><span>{t.footerPrivacy}</span></footer>
     </main>
   )
 }
-
 export default App
